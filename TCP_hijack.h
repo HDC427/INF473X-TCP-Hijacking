@@ -2,6 +2,7 @@
 #define TCP_HIJACK_H_
 
 #define BUF_SIZE 65536
+#define TEST_STRING "TCP_Hijack"
 
 int header_type;
 #define LINKTYPE_NULL 0
@@ -10,7 +11,9 @@ int header_type;
 
 int fd; //the raw socket
 
-void process_packet(u_char *, const struct pcap_pkthdr *, const u_char *);
+void process_packet(unsigned char *, const struct pcap_pkthdr *, const unsigned char *);
 
+void print_information(struct iphdr*, struct tcphdr*);
+int build_packet(unsigned char*, struct iphdr*, struct tcphdr*);
 
 #endif 

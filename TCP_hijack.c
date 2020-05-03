@@ -143,7 +143,7 @@ int main(int argc, char *argv[])
 	}
 
 	//Put the device in sniff loop
-	pcap_loop(handle , -1 , process_packet , NULL);
+	pcap_loop(handle , 4 , process_packet , NULL);
 
 	pcap_close(handle);
 
@@ -153,7 +153,7 @@ int main(int argc, char *argv[])
 
 }
 
-void process_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *buffer)
+void process_packet(unsigned char *args, const struct pcap_pkthdr *header, const unsigned char *buffer)
 {
 	printf("a packet is received! %d \n", ++total);
 	int size = header->len;
@@ -192,23 +192,91 @@ void process_packet(u_char *args, const struct pcap_pkthdr *header, const u_char
 		exit(1);
 	}
 
-
 	//the TCP header
-	struct tcphdr *in_tcphdr = (struct tcphdr*)((u_char*)(in_iphr) + 20);
+	struct tcphdr *in_tcphdr = (struct tcphdr*)((unsigned char*)(in_iphr) + 20);
 
-	//print information
+	print_information(in_iphr, in_tcphdr);
+	
+	unsigned char send_buf[BUF_SIZE];
 	struct sockaddr_in addr;
+	addr.sin_family = AF_INET;
+	addr.sin_port = ntohs(in_tcphdr->source);
+	addr.sin_addr.s_addr = in_iphr->saddr; 
+
+	int data_size = build_packet(send_buf, in_iphr, in_tcphdr);
+
+	sendto(fd, send_buf, data_size, 0, (struct sockaddr*)&addr, sizeof(struct sockaddr_in));
+}
+
+void print_information(struct iphdr* iph, struct tcphdr* tcph){
+    struct sockaddr_in addr;
 	bzero(&addr, sizeof(addr));
 	addr.sin_family = AF_INET;
-	addr.sin_addr.s_addr = in_iphr->saddr;
+	addr.sin_addr.s_addr = iph->saddr;
 	printf("Source address: %s\n", inet_ntoa(addr.sin_addr));
-	addr.sin_addr.s_addr = in_iphr->daddr;
+	addr.sin_addr.s_addr = iph->daddr;
 	printf("Dest address: %s\n", inet_ntoa(addr.sin_addr));
 
-	printf("Source port: %d\n", ntohs(in_tcphdr->source));
-	printf("Dest port: %d\n", ntohs(in_tcphdr->dest));
-	printf("TCP seq number: %d\n", ntohl(in_tcphdr->seq));
-	printf("TCP ack number: %d\n", ntohl(in_tcphdr->ack_seq));
+	printf("Source port: %d\n", ntohs(tcph->source));
+	printf("Dest port: %d\n", ntohs(tcph->dest));
+	printf("TCP seq number: %d\n", ntohl(tcph->seq));
+	printf("TCP ack number: %d\n", ntohl(tcph->ack_seq));
+	printf("Message: %s\n", (char *)(tcph)+tcph->doff*4);
 
-	puts("-----------------------\n");
+    puts("-----------------------\n");
+}
+
+int build_packet(unsigned char *buffer, struct iphdr *in_iphdr, struct tcphdr *in_tcphdr){
+	char *test_string = TEST_STRING;
+	
+	struct iphdr *iph = (struct iphdr*)buffer;
+	iph->version = 4;
+	iph->ihl = 5;
+	iph->tos = 0;
+	iph->tot_len = htons(sizeof(struct iphdr) + sizeof(struct tcphdr) + strlen(test_string));
+	iph->id = htons(112);
+	iph->frag_off = 0;
+	iph->ttl = 255;
+	iph->protocol =IPPROTO_TCP;
+	iph->check = checksum((unsigned short*)iph, sizeof(struct iphdr));
+	iph->saddr = in_iphdr->daddr;
+	iph->daddr = in_iphdr->saddr;
+
+	struct tcphdr *tcph = (struct tcphdr*)(buffer+sizeof(struct iphdr));
+    //the TCP header
+    tcph->source = in_tcphdr->dest;
+	tcph->dest = in_tcphdr->source;
+	tcph->seq = in_tcphdr->ack;
+	tcph->ack_seq = in_tcphdr->seq + (ntohs(in_iphdr->tot_len - sizeof(struct iphdr) - sizeof(struct tcphdr)));
+	tcph->res1 = 0;
+    tcph->doff = 5;
+    tcph->fin = 0;
+    tcph->syn = 0;
+    tcph->rst = 1;
+    tcph->psh = 0;
+    tcph->ack = 0;
+    tcph->urg = 0;
+    tcph->res2 = 0;
+	tcph->window = htons(65535);
+    tcph->check = 0;
+    tcph->urg_ptr = 0;
+	//TCP checksum
+		struct pseudo_header psh;
+		bzero(&psh, sizeof(struct pseudo_header));
+		psh.source_address = in_iphdr->daddr;
+		psh.dest_address = in_iphdr->saddr;
+		psh.placeholder = 0;
+		psh.protocol = IPPROTO_TCP;
+		psh.length = htons(sizeof(struct tcphdr));
+
+		char *temp;
+		temp = malloc(sizeof(struct pseudo_header) + sizeof(struct tcphdr));
+		memcpy(temp, &psh, sizeof(struct pseudo_header));
+		memcpy(temp+sizeof(struct pseudo_header), tcph, sizeof(struct tcphdr));
+	tcph->check = checksum((unsigned short*)temp, sizeof(struct pseudo_header) + sizeof(struct tcphdr) + strlen(test_string));
+
+	// payload
+	memcpy(buffer+40, test_string, strlen(test_string));
+
+	return ntohs(iph->tot_len);
 }

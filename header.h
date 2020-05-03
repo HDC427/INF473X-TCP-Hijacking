@@ -212,15 +212,15 @@ struct udphdr {
 };
 
 /*
-    pseudo udp header needed for udp header checksum calculation
+    pseudo udp header needed for tcp/udp header checksum calculation
 */
-struct pseudo_udp_header
+struct pseudo_header
 {
     u_int32_t source_address;
     u_int32_t dest_address;
     u_int8_t placeholder;
     u_int8_t protocol;
-    u_int16_t udp_length;
+    u_int16_t length;
 };
 
 /*
