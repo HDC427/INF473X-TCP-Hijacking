@@ -11,7 +11,7 @@ int header_type;
 
 int fd; //the raw socket
 
-void process_packet(unsigned char *, const struct pcap_pkthdr *, const unsigned char *);
+void set_up_attack(unsigned char *, const struct pcap_pkthdr *, const unsigned char *);
 
 void print_information(struct iphdr*, struct tcphdr*);
 int build_packet(unsigned char*, struct iphdr*, struct tcphdr*);

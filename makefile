@@ -4,7 +4,7 @@ REBUILDABLE = $(TARGET) *.o
 
 all: $(TARGET)
 
-$(TARGET): $(TARGET).o
+$(TARGET): $(TARGET).o header.o
 	cc -g -o $@ $^ -lpcap
 
 %.o: %.c
